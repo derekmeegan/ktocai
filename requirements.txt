@@ -10,4 +10,4 @@ lxml==5.2.2
 selenium==4.22.0
 fuzzywuzzy==0.18.0
 Whoosh==2.7.4
-streamlit_oauth
+streamlit-oauth==0.1.13
