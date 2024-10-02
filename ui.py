@@ -29,12 +29,15 @@ TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
 REVOKE_ENDPOINT = "https://oauth2.googleapis.com/revoke"
 REDRIECT_URI = os.environ.get("GOOGLE_REDIRECT_URI", "http://localhost:8050")
 
-st.set_page_config(page_title = 'KTOC AI')
+st.set_page_config(
+    page_title = 'KTOC AI',
+    page_icon="🥋",
+    menu_items={
+        'Get Help': 'https://derekmeegan.com',
+    }
+)
 hide_github_icon = """<style>
 .css-1jc7ptx, .e1ewe7hr3, .viewerBadge_container__1QSob, .styles_viewerBadge__1yB5_, .viewerBadge_link__1S137, .viewerBadge_text__1JaDK{ display: none; }
-#MainMenu {
-  visibility: hidden;
-}
 #GithubIcon {
   visibility: hidden;
 }
