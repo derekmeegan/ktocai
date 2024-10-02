@@ -2,6 +2,7 @@ from fuzzywuzzy import process
 import pandas as pd
 import streamlit as st
 from openai import OpenAI
+from streamlit_oauth import OAuth2Component
 import json
 import requests 
 from typing import List, Dict
@@ -18,6 +19,15 @@ from whoosh.index import create_in, open_dir
 from whoosh.fields import Schema, TEXT, ID, STORED
 from whoosh.qparser import QueryParser
 from whoosh import writing
+import base64
+import time
+
+CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
+CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET")
+AUTHORIZE_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
+TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
+REVOKE_ENDPOINT = "https://oauth2.googleapis.com/revoke"
+REDRIECT_URI = os.environ.get("GOOGLE_REDIRECT_URI", "http://localhost:8050")
 
 st.set_page_config(page_title = 'KTOC AI')
 hide_github_icon = """<style>
@@ -32,73 +42,57 @@ hide_github_icon = """<style>
 """
 st.markdown(hide_github_icon, unsafe_allow_html=True)
 
-def find_sections(text: str) -> List[str]:
-    # Define the regular expression pattern
-    pattern = r'[IVXLCDM]+\.\d{0,2}'
-    
-    # Find all matches in the text
-    matches = re.findall(pattern, text)
-    
-    return matches
-
 # OpenAI API client setup
 openai_client = OpenAI(api_key = os.environ.get('OPENAI_API_KEY'))
 
-def get_referee_dress_code():
-    return '''
-    Please bring your referee shirt if you already have one. A red or black referee shirt is mandatory. Judges should wear black pants and black sneakers. No hats, jackets, or coats are allowed.
+# def get_event_map():
+#     return '''
+#     provide the user with the following clickable link https://storage.googleapis.com/naska_rules/event_map.jpg
+#     '''
 
-    Please also provide the following quote from Sensei Bob Leiker: "Pretty simple dress code, dress accordingly"
-    '''
+# def get_rules():
+#     try:
+#         reader = PdfReader("output.pdf")
+#         text = ""
+#         for page in reader.pages:
+#             text += page.extract_text()
 
-def get_event_map():
-    return '''
-    provide the user with the following clickable link https://storage.googleapis.com/naska_rules/event_map.jpg
-    '''
+#         text = re.sub(r"Page \|\s+\d+", "", text)
 
-def get_rules():
-    try:
-        reader = PdfReader("output.pdf")
-        text = ""
-        for page in reader.pages:
-            text += page.extract_text()
+#         pages = requests.get(
+#             os.environ.get('RULESET_ENDPOINT')
+#             # params = {'section': section}
+#         ).text
+#         return f'''
+#         After your rule interpretation, provide a link like "https://storage.googleapis.com/naska_rules/rule_book_<section>.pdf#page=<page>" to the highlighted rulebook so the user can click on it if they choose.
 
-        text = re.sub(r"Page \|\s+\d+", "", text)
+#         rule book:
 
-        pages = requests.get(
-            os.environ.get('RULESET_ENDPOINT')
-            # params = {'section': section}
-        ).text
-        return f'''
-        After your rule interpretation, provide a link like "https://storage.googleapis.com/naska_rules/rule_book_<section>.pdf#page=<page>" to the highlighted rulebook so the user can click on it if they choose.
+#         {text}
 
-        rule book:
+#         Use your interpreation of the rules to select the seciton. which should not include periods, spaces, it should be formatted like VIII2, or IX etc. If applicable, provide the subsection of the rules to and in the link you provide the user. 
+#         ONLY SECITON IX HAS NOT SUBSECTIONS, ALL OTHER SECTIONS REQUIRE A SUBSECTION NUMBER IN URL (LIKE V2). DO NOT INCLUDE A PERIOD OR SPACE BETWEEN THE SECTION LETTER AND SUBSECTION NUMBER
+#         USE THE JSON BELOW TO SELECT THE PAGE NUMBER. ALL URLS REQUIRE A PAGE NUMBER
+#         {pages}
+#         '''
+#     except Exception as e:
+#         print(f'Ruleset broke: {e}')
+#         raise
 
-        {text}
+# def get_judging_or_scorekeeper_assignment():
+#     email = st.session_state.email
+#     result = requests.get(
+#         os.environ.get('JUDGING_ENDPOINT'),
+#         params = {'email': email}
+#     ).text
 
-        Use your interpreation of the rules to select the seciton. which should not include periods, spaces, it should be formatted like VIII2, or IX etc. If applicable, provide the subsection of the rules to and in the link you provide the user. 
-        ONLY SECITON IX HAS NOT SUBSECTIONS, ALL OTHER SECTIONS REQUIRE A SUBSECTION NUMBER IN URL (LIKE V2). DO NOT INCLUDE A PERIOD OR SPACE BETWEEN THE SECTION LETTER AND SUBSECTION NUMBER
-        USE THE JSON BELOW TO SELECT THE PAGE NUMBER. ALL URLS REQUIRE A PAGE NUMBER
-        {pages}
-        '''
-    except Exception as e:
-        print(f'Ruleset broke: {e}')
-        raise
-
-def get_judging_or_scorekeeper_assignment():
-    email = st.session_state.email
-    result = requests.get(
-        os.environ.get('JUDGING_ENDPOINT'),
-        params = {'email': email}
-    ).text
-
-    if result == "account not found":
-        return 'Let the user know that their assignment was not found. If they believe this is a mistake, then they should reach out to derekmeegan@gmail.com or an event coordinator to verify their assignment.'
+#     if result == "account not found":
+#         return 'Let the user know that their assignment was not found. If they believe this is a mistake, then they should reach out to derekmeegan@gmail.com or an event coordinator to verify their assignment.'
     
-    return f'''
-    the users judging or scorekeeper asignment is as the following. they could be either be a judge or scorekeeper so just say it is their assignment.
-    {result}
-    '''
+#     return f'''
+#     the users judging or scorekeeper asignment is as the following. they could be either be a judge or scorekeeper so just say it is their assignment.
+#     {result}
+#     '''
     
 def get_tournament_website():
     return "Provide the following clickable link: https://www.ktocnationals.com/"
@@ -106,32 +100,20 @@ def get_tournament_website():
 
 def get_tournament_address():
     return f"""
-    The convention center is at 1 Convention Boulevard, Atlantic City, NJ 08401 and the Sheraton Atlantic City, 
-    the tournament hotel, is at Two Convention Boulevard, 2 Convention Blvd, Atlantic City, NJ 08401
-
-    also include the following information on parking: {get_parking_information()}
+    The addresss is 160-02 Liberty Avenue, Jamaica, NY 11451 which is York College. if they would like furhter directions about how to drive to the tournament
+    please direct them to this link: https://yorkathletics.com/sports/2007/10/4/facilities.aspx
     """
 
-def get_parking_information():
-    return """
-    The two options for parking are:
+# def get_parking_information():
+    # return """
+    # The two options for parking are:
 
-    Paring at the convention center parking garage for 20 dollars per day. You can accesss convention center through Hall B from the parking lot
+    # Paring at the convention center parking garage for 20 dollars per day. You can accesss convention center through Hall B from the parking lot
 
-    Parking at the Sheraton hotel, which is 20 dollars per day for self park or 30 dollars per day for valet.
+    # Parking at the Sheraton hotel, which is 20 dollars per day for self park or 30 dollars per day for valet.
 
-    Provide the options as distinct bullets
-    """
-
-def get_highlighted_ruleset_url(
-    section: str
-):
-    section = section.strip().replace(' ', '').replace('.', '').upper().replace('SECTION', '').replace('(', '').replace(')', '')
-    url = requests.get(
-        os.environ.get('RULESET_ENDPOINT'),
-        params = {'section': section}
-    ).text
-    return url
+    # Provide the options as distinct bullets
+    # """
 
 def get_developer_info():
     return 'The developer of this application is Derek Meegan. He is a technology consultant from Santa Clarita, California. If they would like to contact me or find out more about me, provide them this link to my website: derekmeegan.com'
@@ -147,188 +129,177 @@ def get_promoters():
         +1 (646) 938-5903
 
         karatetoc@gmail.com
-
     '''
 
-def get_musical_rule():
-    return '''Competitors in any NASKA rated musical division must have 75% choreography with their music. While this rule is currently not in the NASKA rule book it is a rule for the tournament and league.'''
+# def get_registration_times_and_locations():
+#     registration_data = (
+#         pd.read_json(get_overall_weekend_schedule_and_location())
+#         .loc[lambda row: row.Description.str.lower().str.contains('registration') | row.Description.str.lower().str.contains('added divisions')]
+#         [['Day/Time', 'Notes']]
+#         .to_json(orient = 'records')
+#     )
+#     return f'''
+#     if the user wants to pick up their registration or register in person, they can do so at the following locations and times:
+#     {registration_data}
 
-def get_registration_times_and_locations():
-    registration_data = (
-        pd.read_json(get_overall_weekend_schedule_and_location())
-        .loc[lambda row: row.Description.str.lower().str.contains('registration') | row.Description.str.lower().str.contains('added divisions')]
-        [['Day/Time', 'Notes']]
-        .to_json(orient = 'records')
-    )
-    return f'''
-    if the user wants to pick up their registration or register in person, they can do so at the following locations and times:
-    {registration_data}
+#     additionally, let them know they can register online and provide this link: https://www.myuventex.com/#login;id=331363;eventType=SuperEvent
+#     '''
 
-    additionally, let them know they can register online and provide this link: https://www.myuventex.com/#login;id=331363;eventType=SuperEvent
-    '''
+# def get_ring_start_time(ring: str, day: str = "friday") -> str:
+#     day = str(day).lower()
+#     try:
+#         if ring != 'stage':
+#             ring = int(ring)
 
-def get_convention_center_info():
-    return {
-        'address': '1 Convention Blvd, Atlantic City, NJ 08401',
-        'phone': '609-449-2000',
-        'hours': '24/7'
-    }
+#         # Get the current day of the week if 'day' is not provided
+#         current_day = datetime.now().strftime('%A')
 
-def get_ring_start_time(ring: str, day: str = "friday") -> str:
-    day = str(day).lower()
-    try:
-        if ring != 'stage':
-            ring = int(ring)
-
-        # Get the current day of the week if 'day' is not provided
-        current_day = datetime.now().strftime('%A')
-
-        # Check if the day is Saturday
-        if current_day.lower() == "saturday":
-            day = "saturday"
+#         # Check if the day is Saturday
+#         if current_day.lower() == "saturday":
+#             day = "saturday"
         
 
-        params={
-            'day': day,
-            'ring': ring
-        }
-        start_time = requests.get(os.environ.get('RING_ENDPOINT'), params=params).text
-        return f"""
-        The following start time was identified. if the start time was not found, let the user know. make sure to include in at the end of your response on its own line that this feature is powered by Uventex
-        Please reiterate the day and time in your response. Use the words Friday or Saturday explicitly and make sure to include am or pm
-        {start_time}
-        """
+#         params={
+#             'day': day,
+#             'ring': ring
+#         }
+#         start_time = requests.get(os.environ.get('RING_ENDPOINT'), params=params).text
+#         return f"""
+#         The following start time was identified. if the start time was not found, let the user know. make sure to include in at the end of your response on its own line that this feature is powered by Uventex
+#         Please reiterate the day and time in your response. Use the words Friday or Saturday explicitly and make sure to include am or pm
+#         {start_time}
+#         """
 
-    except ValueError:
-        return "I'm sorry, I could not find the ring number you specified."
+#     except ValueError:
+#         return "I'm sorry, I could not find the ring number you specified."
 
 
-def get_all_divisions():
-    division_data = requests.get(os.environ.get('DIVISIONS_ENDPOINT')).text
-    return pd.read_json(StringIO(division_data))
+# def get_all_divisions():
+#     division_data = requests.get(os.environ.get('DIVISIONS_ENDPOINT')).text
+#     return pd.read_json(StringIO(division_data))
 
-ix = None
+# ix = None
 
-def create_division_index(index_dir: str, divisions_df: pd.DataFrame):
-    if not os.path.exists(index_dir):
-        os.mkdir(index_dir)
-        schema = Schema(
-            name=TEXT(stored=True),
-            division_code=ID(stored=True),
-            time=STORED(),
-            day=STORED(),
-            ring=STORED(),
-        )
-        ix = create_in(index_dir, schema)
-    else:
-        ix = open_dir(index_dir)
+# def create_division_index(index_dir: str, divisions_df: pd.DataFrame):
+#     if not os.path.exists(index_dir):
+#         os.mkdir(index_dir)
+#         schema = Schema(
+#             name=TEXT(stored=True),
+#             division_code=ID(stored=True),
+#             time=STORED(),
+#             day=STORED(),
+#             ring=STORED(),
+#         )
+#         ix = create_in(index_dir, schema)
+#     else:
+#         ix = open_dir(index_dir)
 
-    writer = ix.writer()
+#     writer = ix.writer()
     
-    for _, row in divisions_df.iterrows():
-        writer.add_document(
-            name=row['name'].lower(),  # Lowercase for case-insensitive search
-            time=row['time'],
-            day=row['day'],
-            ring=row['ring'],
-            division_code=str(row['division_code'])  # Assuming there's an 'id' column for unique identification
-        )
-    writer.commit(mergetype=writing.CLEAR)
+#     for _, row in divisions_df.iterrows():
+#         writer.add_document(
+#             name=row['name'].lower(),  # Lowercase for case-insensitive search
+#             time=row['time'],
+#             day=row['day'],
+#             ring=row['ring'],
+#             division_code=str(row['division_code'])  # Assuming there's an 'id' column for unique identification
+#         )
+#     writer.commit(mergetype=writing.CLEAR)
 
-    return ix
+#     return ix
 
-def get_division_info_and_time_by_keywords(division_query_phrase: str):
-    global ix  # Use the global variable for the index
+# def get_division_info_and_time_by_keywords(division_query_phrase: str):
+#     global ix  # Use the global variable for the index
 
-    division_query_phrase = division_query_phrase.lower()
-    if 'korean challenge' in division_query_phrase or 'traditional challenge' in division_query_phrase:
-        division_query_phrase = division_query_phrase.replace('and under', '')
+#     division_query_phrase = division_query_phrase.lower()
+#     if 'korean challenge' in division_query_phrase or 'traditional challenge' in division_query_phrase:
+#         division_query_phrase = division_query_phrase.replace('and under', '')
 
-    if 'cmx' in division_query_phrase:
-        return "please let the user know they have to specify which division, creative, musical or extreme"
+#     if 'cmx' in division_query_phrase:
+#         return "please let the user know they have to specify which division, creative, musical or extreme"
 
-    if 'trad' in division_query_phrase:
-        division_query_phrase = division_query_phrase.replace(' trad ', ' traditional ')
+#     if 'trad' in division_query_phrase:
+#         division_query_phrase = division_query_phrase.replace(' trad ', ' traditional ')
 
-    if 'fighting' in division_query_phrase:
-        division_query_phrase = division_query_phrase.replace('fighting', 'sparring')
+#     if 'fighting' in division_query_phrase:
+#         division_query_phrase = division_query_phrase.replace('fighting', 'sparring')
        
-    if 'continuous' in division_query_phrase:
-        division_query_phrase = division_query_phrase.replace('sparring', '')
-        division_query_phrase = division_query_phrase.replace("'", '')
-        division_query_phrase = division_query_phrase.replace('boys', '')
-        division_query_phrase = division_query_phrase.replace('girls', '')
-        division_query_phrase = division_query_phrase.replace('womens', '18 & Over')
-        division_query_phrase = division_query_phrase.replace('mens', '18 & Over')
+#     if 'continuous' in division_query_phrase:
+#         division_query_phrase = division_query_phrase.replace('sparring', '')
+#         division_query_phrase = division_query_phrase.replace("'", '')
+#         division_query_phrase = division_query_phrase.replace('boys', '')
+#         division_query_phrase = division_query_phrase.replace('girls', '')
+#         division_query_phrase = division_query_phrase.replace('womens', '18 & Over')
+#         division_query_phrase = division_query_phrase.replace('mens', '18 & Over')
 
-    if 'sync' in division_query_phrase and 'synchronized' not in division_query_phrase:
-        division_query_phrase = division_query_phrase.replace('sync', ' synchronized ')
+#     if 'sync' in division_query_phrase and 'synchronized' not in division_query_phrase:
+#         division_query_phrase = division_query_phrase.replace('sync', ' synchronized ')
 
-    if 'womens' in division_query_phrase or "women's" in division_query_phrase:
-        division_query_phrase = division_query_phrase.replace('womens ', 'women ').replace("women's ", ' women ')
+#     if 'womens' in division_query_phrase or "women's" in division_query_phrase:
+#         division_query_phrase = division_query_phrase.replace('womens ', 'women ').replace("women's ", ' women ')
     
-    elif 'mens' in division_query_phrase or "men's" in division_query_phrase:
-        division_query_phrase = division_query_phrase.replace('mens ', ' men ').replace("men's ", ' men ').replace(' mens ', ' men ').replace(" men's ", ' men ').replace(' mens', ' men').replace(" men's", ' men')
+#     elif 'mens' in division_query_phrase or "men's" in division_query_phrase:
+#         division_query_phrase = division_query_phrase.replace('mens ', ' men ').replace("men's ", ' men ').replace(' mens ', ' men ').replace(" men's ", ' men ').replace(' mens', ' men').replace(" men's", ' men')
 
-    print('query phrase below')
-    print(division_query_phrase)
-    # Create the index on-demand
-    if ix is None:
-        ix = create_division_index(
-            "division_indexdir",
-            (
-                get_all_divisions()
-                .fillna('unknown')
-            )
-        )
+#     print('query phrase below')
+#     print(division_query_phrase)
+#     # Create the index on-demand
+#     if ix is None:
+#         ix = create_division_index(
+#             "division_indexdir",
+#             (
+#                 get_all_divisions()
+#                 .fillna('unknown')
+#             )
+#         )
     
-    relevant_divisions = []
+#     relevant_divisions = []
 
-    with ix.searcher() as searcher:
-        query = QueryParser("name", ix.schema).parse(division_query_phrase)
-        results = searcher.search(query, limit=7)
+#     with ix.searcher() as searcher:
+#         query = QueryParser("name", ix.schema).parse(division_query_phrase)
+#         results = searcher.search(query, limit=7)
 
-        for result in results:
-            relevant_divisions.append({
-                "division_code": result["division_code"],
-                "name": result["name"],
-                "time" : result['time'],
-                "day": result['day'],
-                "ring": result['ring']
-            })
+#         for result in results:
+#             relevant_divisions.append({
+#                 "division_code": result["division_code"],
+#                 "name": result["name"],
+#                 "time" : result['time'],
+#                 "day": result['day'],
+#                 "ring": result['ring']
+#             })
 
-    if not relevant_divisions:
-        return "No divisions found matching the provided query."
+#     if not relevant_divisions:
+#         return "No divisions found matching the provided query."
 
-    # Convert the relevant divisions to JSON
-    relevant_divisions_json = pd.DataFrame(relevant_divisions).to_json(orient='records')
-    print(relevant_divisions_json)
+#     # Convert the relevant divisions to JSON
+#     relevant_divisions_json = pd.DataFrame(relevant_divisions).to_json(orient='records')
+#     print(relevant_divisions_json)
 
-    return f'''
-    The following divisions were found to be closest to what the user requested: 
-    {relevant_divisions_json}.
-    Please provide them with the day, time, and ring number associated with the division closest to what they originally requested.
-    If there are several divisions that are very, very similar, then provide information for all of those divisions.
-    Remind them the times are estimated and may change based on completion of prior divisions. If they did not provide all fields,
-    let them know you can provide better results if they provide further detail. make sure to include in at the end of your response on its own line that this feature is powered by Uventex
-    '''
+#     return f'''
+#     The following divisions were found to be closest to what the user requested: 
+#     {relevant_divisions_json}.
+#     Please provide them with the day, time, and ring number associated with the division closest to what they originally requested.
+#     If there are several divisions that are very, very similar, then provide information for all of those divisions.
+#     Remind them the times are estimated and may change based on completion of prior divisions. If they did not provide all fields,
+#     let them know you can provide better results if they provide further detail. make sure to include in at the end of your response on its own line that this feature is powered by Uventex
+#     '''
 
-def get_division_info_and_time_by_code(
-    division_code: str
-):
-    division_code = division_code.replace('-', '')
-    division = (
-        get_all_divisions()
-        .loc[lambda row: row.division_code.str.replace('-', '', regex = False).str.lower() == division_code.lower()]
-        .to_json(orient = 'records')
-    )
+# def get_division_info_and_time_by_code(
+#     division_code: str
+# ):
+#     division_code = division_code.replace('-', '')
+#     division = (
+#         get_all_divisions()
+#         .loc[lambda row: row.division_code.str.replace('-', '', regex = False).str.lower() == division_code.lower()]
+#         .to_json(orient = 'records')
+#     )
     
-    return f'''
-    YOU MUST provide them with the FULL DIVISION NAME, DAY, TIME, and RING NUMBER associated with the division.
-    remind them the times are estimated and may change based on completion of prior divisions.
-    if there are no divisions that match the code, let the user know you were not able to find it.
-    {division}
-    '''
+#     return f'''
+#     YOU MUST provide them with the FULL DIVISION NAME, DAY, TIME, and RING NUMBER associated with the division.
+#     remind them the times are estimated and may change based on completion of prior divisions.
+#     if there are no divisions that match the code, let the user know you were not able to find it.
+#     {division}
+#     '''
 
 def append_session_date(sheet, worksheet_name, session_date, session_count):
     worksheet = sheet.worksheet(worksheet_name)
@@ -407,52 +378,40 @@ def get_place(
 
 def run_conversation(messages):
     tools = [
-        {
-            "type": "function",
-            "function": {
-                "name": "get_judging_or_scorekeeper_assignment",
-                "description": "Provides the judging or scorekeeper assignment for the current user. User could be either a judge or scorekeeper.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                    },
-                },
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "get_division_info_and_time_by_code",
-                "description": "Uses divison code to identify division and provide details. division codes will contain both letters and numbers. do not confuse an age range with a division code for example 14-17 is not a division code",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "division_code": {
-                            "type": "string",
-                            "description": "Division code will be consist of letters and numbers and may include a -",
-                        },
-                    },
-                    "required": ["division_code"],
-                },
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "get_division_info_and_time_by_keywords",
-                "description": "Uses key words from division phrase to find closest matches.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "division_query_phrase": {
-                            "type": "string",
-                            "description": "This is the phrase the user provides to identify the division. May be something like '10-11 boys black belt sparring'",
-                        },
-                    },
-                    "required": ["division_query_phrase"],
-                },
-            }
-        },
+        # {
+        #     "type": "function",
+        #     "function": {
+        #         "name": "get_division_info_and_time_by_code",
+        #         "description": "Uses divison code to identify division and provide details. division codes will contain both letters and numbers. do not confuse an age range with a division code for example 14-17 is not a division code",
+        #         "parameters": {
+        #             "type": "object",
+        #             "properties": {
+        #                 "division_code": {
+        #                     "type": "string",
+        #                     "description": "Division code will be consist of letters and numbers and may include a -",
+        #                 },
+        #             },
+        #             "required": ["division_code"],
+        #         },
+        #     }
+        # },
+        # {
+        #     "type": "function",
+        #     "function": {
+        #         "name": "get_division_info_and_time_by_keywords",
+        #         "description": "Uses key words from division phrase to find closest matches.",
+        #         "parameters": {
+        #             "type": "object",
+        #             "properties": {
+        #                 "division_query_phrase": {
+        #                     "type": "string",
+        #                     "description": "This is the phrase the user provides to identify the division. May be something like '10-11 boys black belt sparring'",
+        #                 },
+        #             },
+        #             "required": ["division_query_phrase"],
+        #         },
+        #     }
+        # },
         {
             "type": "function",
             "function": {
@@ -474,54 +433,42 @@ def run_conversation(messages):
                 },
             }
         },
-        {
-            "type": "function",
-            "function": {
-                "name": "get_rules",
-                "description": "Get ruleset for the tournament and North American Sport Karate Association.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                    },
-                },
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "get_overall_weekend_schedule_and_location",
-                "description": "Get the overall weekeend schedule along with location and description for events. Use this for if a user asks where registration or an event is",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                    },
-                },
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "get_registration_times_and_locations",
-                "description": "Get the times and location of the tournament registration",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                    },
-                },
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "get_ruleset_for_korean_challenge",
-                "description": "Get the ruleset for the korean challenge",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                    },
-                },
-            }
-        },
+        # {
+        #     "type": "function",
+        #     "function": {
+        #         "name": "get_rules",
+        #         "description": "Get ruleset for the tournament and North American Sport Karate Association.",
+        #         "parameters": {
+        #             "type": "object",
+        #             "properties": {
+        #             },
+        #         },
+        #     }
+        # },
+        # {
+        #     "type": "function",
+        #     "function": {
+        #         "name": "get_overall_weekend_schedule_and_location",
+        #         "description": "Get the overall weekeend schedule along with location and description for events. Use this for if a user asks where registration or an event is",
+        #         "parameters": {
+        #             "type": "object",
+        #             "properties": {
+        #             },
+        #         },
+        #     }
+        # },
+        # {
+        #     "type": "function",
+        #     "function": {
+        #         "name": "get_registration_times_and_locations",
+        #         "description": "Get the times and location of the tournament registration",
+        #         "parameters": {
+        #             "type": "object",
+        #             "properties": {
+        #             },
+        #         },
+        #     }
+        # },
         {
             "type": "function",
             "function": {
@@ -546,51 +493,39 @@ def run_conversation(messages):
                 },
             }
         },
-        {
-            "type": "function",
-            "function": {
-                "name": "get_referee_dress_code",
-                "description": "Gets the dress code required for referees.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                    },
-                },
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "get_ring_start_time",
-                "description": "Gets the starting time for a particular ring.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "ring": {
-                            "type": "string",
-                            "description": "Ring should be a number unless the ring is 'stage'.",
-                        },
-                        "day": {
-                            "type": "string",
-                            "description": "The day that the ring starts on. Should only be friday or saturday",
-                        },
-                    },
-                    "required": ["keyword"],
-                },
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "get_event_map",
-                "description": "Provides a map of the event.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                    },
-                },
-            }
-        },
+        # {
+        #     "type": "function",
+        #     "function": {
+        #         "name": "get_ring_start_time",
+        #         "description": "Gets the starting time for a particular ring.",
+        #         "parameters": {
+        #             "type": "object",
+        #             "properties": {
+        #                 "ring": {
+        #                     "type": "string",
+        #                     "description": "Ring should be a number unless the ring is 'stage'.",
+        #                 },
+        #                 "day": {
+        #                     "type": "string",
+        #                     "description": "The day that the ring starts on. Should only be friday or saturday",
+        #                 },
+        #             },
+        #             "required": ["keyword"],
+        #         },
+        #     }
+        # },
+        # {
+        #     "type": "function",
+        #     "function": {
+        #         "name": "get_event_map",
+        #         "description": "Provides a map of the event.",
+        #         "parameters": {
+        #             "type": "object",
+        #             "properties": {
+        #             },
+        #         },
+        #     }
+        # },
         {
             "type": "function",
             "function": {
@@ -615,38 +550,21 @@ def run_conversation(messages):
                 },
             }
         },
-        {
-            "type": "function",
-            "function": {
-                "name": "get_parking_information",
-                "description": "Provides parking information for the tournament.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                    },
-                },
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "get_musical_rule",
-                "description": "Provides musicality rules for NASKA rated musical forms or weapons.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                    },
-                },
-            }
-        },
+        # {
+        #     "type": "function",
+        #     "function": {
+        #         "name": "get_parking_information",
+        #         "description": "Provides parking information for the tournament.",
+        #         "parameters": {
+        #             "type": "object",
+        #             "properties": {
+        #             },
+        #         },
+        #     }
+        # },
     ]
     current_messages = [m for m in messages]
     last_message = current_messages[-1]['content']
-    special_command = False
-    if last_message.startswith(os.environ.get('SECRET_COMMAND_ONE')):
-        meta_prompt = os.environ.get('SPECIAL_COMMAND_META_PROMPT')
-        special_command = True
-        current_messages[-1]['content'] = meta_prompt[:205] + last_message + ' ' +  meta_prompt[205:]
 
 
     # First API call to get the response
@@ -675,8 +593,6 @@ def run_conversation(messages):
 
         chunk_content = delta.content
         if chunk_content is not None and not is_tool_resp:
-            if special_command:
-                current_messages[-1]['content'] = last_message
 
             yield chunk_content
 
@@ -688,23 +604,21 @@ def run_conversation(messages):
     if is_tool_resp:
         available_functions = {
             "get_place": get_place,
-            "get_rules": get_rules,
-            "get_overall_weekend_schedule_and_location": get_overall_weekend_schedule_and_location,
-            'get_registration_times_and_locations': get_registration_times_and_locations,
-            'get_ruleset_for_korean_challenge': get_ruleset_for_korean_challenge,
+            # "get_rules": get_rules,
+            # "get_overall_weekend_schedule_and_location": get_overall_weekend_schedule_and_location,
+            # 'get_registration_times_and_locations': get_registration_times_and_locations,
             'get_promoters': get_promoters,
             "get_developer_info" : get_developer_info,
-            'get_division_info_and_time_by_keywords': get_division_info_and_time_by_keywords,
-            'get_division_info_and_time_by_code': get_division_info_and_time_by_code,
-            "get_referee_dress_code": get_referee_dress_code,
-            'get_judging_or_scorekeeper_assignment': get_judging_or_scorekeeper_assignment,
-            "get_ring_start_time": get_ring_start_time,
-            '{functions.get_ring_start_time}': get_ring_start_time,
-            "get_event_map": get_event_map,
-            "get_parking_information": get_parking_information,
+            # 'get_division_info_and_time_by_keywords': get_division_info_and_time_by_keywords,
+            # 'get_division_info_and_time_by_code': get_division_info_and_time_by_code,
+            # "get_referee_dress_code": get_referee_dress_code,
+            # 'get_judging_or_scorekeeper_assignment': get_judging_or_scorekeeper_assignment,
+            # "get_ring_start_time": get_ring_start_time,
+            # '{functions.get_ring_start_time}': get_ring_start_time,
+            # "get_event_map": get_event_map,
+            # "get_parking_information": get_parking_information,
             "get_tournament_website": get_tournament_website,
             "get_tournament_address": get_tournament_address,
-            "get_musical_rule": get_musical_rule
         }
 
         function_to_call = available_functions[function_name]
@@ -755,15 +669,18 @@ def run_conversation(messages):
             temperature=.1
         )  # get a new response from the model where it can see the function response
 
-        if special_command:
-            current_messages[-2]['content'] = last_message
-
         for chunk in second_response:
             delta = chunk.choices[0].delta
 
             chunk_content = delta.content
             if chunk_content is not None:
                 yield chunk_content
+
+
+def word_generator(sentence):
+    for word in sentence.split():
+        yield word + " "
+        time.sleep(0.025)
         
 def main_app(session_date):
     st.title("Chat with KTOC AI")
@@ -793,12 +710,22 @@ def main_app(session_date):
         ]
 
     # Display chat messages from history on app rerun
-    for message in st.session_state.messages[1:]:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+    # for message in st.session_state.messages[1:]:
+    #     with st.chat_message(message["role"]):
+    #         st.markdown(message["content"])
 
+    # time.sleep(5)
+
+    welcome_message = "Welcome to the KTOC AI! I'm here to assist you with all your questions related to the 2024 KTOC Nationals, including tournament details, registration information, local restaurants, and events happening in Jamaica, NY. Whether you need help navigating the competition schedule or finding nearby places to eat, I'm here to ensure you have a great experience. Feel free to ask me anything related to the tournament!"
+        
+    with st.chat_message("assistant"):
+        st.write_stream(word_generator(welcome_message))
+    
+    st.session_state.messages.append({"role": "assistant", "content": welcome_message})
     # Accept user input
     if prompt := st.chat_input("What is up?"):
+        
+
         # Display user message in chat message container
         with st.chat_message("user"):
             st.markdown(prompt)
@@ -832,32 +759,8 @@ def main_app(session_date):
 
             st.session_state.messages.append({"role": "assistant", "content": response_output})
 
-def email_input_screen():
-    session_date = datetime.strptime(st.session_state.session_date, "%I:%M%p %A, %B %d")
-    fifteen_later = datetime.strptime(st.session_state.fifteen_later, "%I:%M%p %A, %B %d")
-
-    if session_date > fifteen_later:
-        st.session_state.rate_limited = False
-
-    st.title("Email Verification")
-    if st.session_state.rate_limited:
-        st.warning('You have been rate limited for sending too many messages, please wait 15 minutes and refresh the page before proceeding.', icon="⚠️")
-    
-    email = st.text_input("Enter your email to proceed:")
-    email = email.lower()
-    
-    if st.button("Submit"):
-        if email and email in st.session_state.valid_emails:
-            st.session_state.email = email
-            st.session_state.email_verified = True
-            st.session_state.worksheet_name = f'{email}_activity'
-            ensure_worksheet_exists(sheet, st.session_state.worksheet_name, st.session_state.session_date, st.session_state.session_count)
-            st.rerun()
-        else:
-            st.error("Invalid email. Please try again.")
-
-if 'valid_emails' not in st.session_state:
-    st.session_state.valid_emails = [x.lower() for x in sheet.worksheet("users").col_values(1)[1:]]
+# if 'valid_emails' not in st.session_state:
+#     st.session_state.valid_emails = [x.lower() for x in sheet.worksheet("users").col_values(1)[1:]]
 
 if 'email_verified' not in st.session_state:
     st.session_state.email_verified = False
@@ -880,7 +783,62 @@ if 'fifteen_later' not in st.session_state:
 if 'worksheet_name' not in st.session_state:
     st.session_state.worksheet_name = None
 
-if not st.session_state.email_verified or st.session_state.rate_limited:
-    email_input_screen()
+if "auth" not in st.session_state:
+    session_date = datetime.strptime(st.session_state.session_date, "%I:%M%p %A, %B %d")
+    fifteen_later = datetime.strptime(st.session_state.fifteen_later, "%I:%M%p %A, %B %d")
+    # create a button to start the OAuth2 flow
+    if session_date > fifteen_later:
+        st.session_state.rate_limited = False
+
+    if st.session_state.rate_limited:
+        st.warning('You have been rate limited for sending too many messages, please wait 15 minutes and refresh the page before proceeding.', icon="⚠️")
+
+    placeholder = st.empty()
+
+    with placeholder.container():
+
+        st.title("Welcome to KTOC AI")
+        st.write("Please sign in with your Google account to proceed.")
+        ## put a break here
+        st.write("")
+        st.write("")
+
+        left_co, cent_co,last_co = st.columns(3)
+        with cent_co:
+            st.image("https://ucarecdn.com/416c9858-2533-4d5c-9293-01ab440a9b11/-/scale_crop/300x300/", width=200)
+
+        st.write("")
+        st.write("")
+        st.write("")
+        oauth2 = OAuth2Component(CLIENT_ID, CLIENT_SECRET, AUTHORIZE_ENDPOINT, TOKEN_ENDPOINT, TOKEN_ENDPOINT, REVOKE_ENDPOINT)
+        result = oauth2.authorize_button(
+            name="Continue with Google",
+            icon="https://www.google.com.tw/favicon.ico",
+            redirect_uri=REDRIECT_URI,
+            scope="openid email profile",
+            key="google",
+            extras_params={"prompt": "consent", "access_type": "offline"},
+            use_container_width=True,
+        )
+
+        if result:
+            # decode the id_token jwt and get the user's email address
+            id_token = result["token"]["id_token"]
+            # verify the signature is an optional step for security
+            payload = id_token.split(".")[1]
+            # add padding to the payload if needed
+            payload += "=" * (-len(payload) % 4)
+            payload = json.loads(base64.b64decode(payload))
+            email = payload["email"]
+            st.session_state["auth"] = email
+            st.session_state["token"] = result["token"]
+
+            st.session_state.email_verified = True
+            st.session_state.worksheet_name = f'{email}_activity'
+            ensure_worksheet_exists(sheet, st.session_state.worksheet_name, st.session_state.session_date, st.session_state.session_count)
+
+
+            placeholder.empty()
+            st.rerun()
 else:
     main_app(st.session_state.session_date)
